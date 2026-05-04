@@ -17,17 +17,18 @@ export interface AgentOutput {
 
 // ── LLM message format ───────────────────────────────────────
 
-// Mirrors Anthropic's content-block model so AnthropicProvider
-// needs zero translation between our types and the SDK types.
+// Mirrors OpenAI's chat completion message shape.
+// tool_use blocks live in assistant messages; tool results are separate "tool" role messages.
 export type ContentBlock =
   | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: "tool_use"; id: string; name: string; input: unknown };
 
-export interface Message {
-  role: "user" | "assistant";
-  content: string | ContentBlock[];
-}
+// Discriminated union — each role has exactly the fields it needs, no optional leakage.
+export type Message =
+  | { role: "system"; content: string }
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string | ContentBlock[] }
+  | { role: "tool"; content: string; tool_call_id: string };
 
 // ── Tool ─────────────────────────────────────────────────────
 

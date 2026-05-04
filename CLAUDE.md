@@ -69,7 +69,7 @@ APPLICATION (per-project — rebuilt for FinBot, B0Bot, MASAR...)
 |---|---|---|
 | `src/core/` | TypeScript built-in types only | `framework/`, `llm/`, `memory/`, `agents/` |
 | `src/framework/` | `core/`, npm packages | `agents/`, `tools/`, `state/`, `config/` |
-| `src/llm/` | `core/`, npm packages (Anthropic SDK) | `framework/`, `agents/` |
+| `src/llm/` | `core/`, npm packages (OpenAI SDK) | `framework/`, `agents/` |
 | `src/memory/` | `core/`, npm packages | `framework/`, `agents/` |
 | `src/observability/` | `core/`, npm packages | `framework/`, `agents/` |
 | `src/agents/` | `core/`, `framework/`, `llm/`, `memory/`, `tools/` | other `agents/`, `framework/registry.ts` |
@@ -122,11 +122,12 @@ and why `console.log('done')` is a problem in a multi-agent system.
 ---
 
 ### Phase 4 — LLM Provider (`src/llm/`)
-Implement `AnthropicProvider` using the Anthropic SDK, satisfying the `LLMProvider`
-interface defined in `src/core/types.ts`. Use tool_use / tool_result message format for tool calls.
+Implement `OpenAIProvider` using the OpenAI SDK, satisfying the `LLMProvider`
+interface defined in `src/core/types.ts`. Use OpenAI's function-calling format: tool calls
+arrive as `tool_calls` on the assistant message; results are sent back as `role: "tool"` messages.
 
-`AnthropicProvider` owns retry/backoff for 429s and 5xx (the SDK has hooks for this) —
-bubble other errors up unchanged. Every LLM call must honor `AgentContext.signal` so the
+`OpenAIProvider` configures the SDK client with `maxRetries: 3` for automatic 429/5xx backoff —
+other errors bubble up unchanged. Every LLM call must honor `AgentContext.signal` so the
 orchestrator can cancel an in-flight run cleanly.
 
 **Learning checkpoint:** Explain why we implement the interface from `src/core/`
@@ -290,7 +291,7 @@ It is the only file that knows about every concrete type. Load env vars with Zod
 then build the dependency graph explicitly:
 
 ```typescript
-const llm      = new AnthropicProvider(env.anthropicKey);
+const llm      = new OpenAIProvider(env.openaiKey);
 const memory   = new ShortTermMemory();
 const registry = new AgentRegistry();
 
