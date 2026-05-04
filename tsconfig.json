@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "moduleResolution": "bundler",
+    "target": "ESNext",
+    "module": "ESNext",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "paths": {
+      "@core/*":          ["./src/core/*"],
+      "@framework/*":     ["./src/framework/*"],
+      "@llm/*":           ["./src/llm/*"],
+      "@memory/*":        ["./src/memory/*"],
+      "@observability/*": ["./src/observability/*"],
+      "@agents/*":        ["./src/agents/*"],
+      "@tools/*":         ["./src/tools/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
