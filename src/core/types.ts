@@ -114,6 +114,16 @@ export interface TraceCollector {
   getEvents(): readonly TraceEvent[];
 }
 
+// ── Agent ────────────────────────────────────────────────────
+
+// The public face of every agent — what the registry stores and the orchestrator calls.
+// BaseAgent (src/framework/agent.ts) implements this; agents never expose more than this to peers.
+export interface Agent {
+  readonly name: string;
+  readonly description: string; // used by the orchestrator's planner to decide which agent to call
+  run(input: AgentInput, ctx: AgentContext): Promise<AgentOutput>;
+}
+
 // ── AgentContext ─────────────────────────────────────────────
 
 // Passed into every agent call and every tool execute().
