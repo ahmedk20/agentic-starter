@@ -1,6 +1,7 @@
 // Composition root — the only file that knows about every concrete type.
 // If a dependency is wired incorrectly, this is the only place to look.
 import { AnalystAgent } from "@agents/analyst";
+import { ResearcherAgent } from "@agents/researcher";
 import { env } from "@config/env";
 import { buildContext } from "@framework/context";
 import { Orchestrator } from "@framework/orchestrator";
@@ -15,6 +16,7 @@ const memory   = new ShortTermMemory(); // available for agents that need cross-
 const registry = new AgentRegistry();
 
 registry.register(new AnalystAgent(llm));
+registry.register(new ResearcherAgent(llm));
 
 const orchestrator = new Orchestrator(registry, llm);
 
