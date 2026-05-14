@@ -17,7 +17,8 @@
       "@memory/*":        ["./src/memory/*"],
       "@observability/*": ["./src/observability/*"],
       "@agents/*":        ["./src/agents/*"],
-      "@tools/*":         ["./src/tools/*"]
+      "@tools/*":         ["./src/tools/*"],
+      "@config/*":        ["./src/config/*"]
     }
   },
   "include": ["src/**/*"],
