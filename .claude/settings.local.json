@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(bun install *)",
-      "Bash(bunx tsc *)"
+      "Bash(bunx tsc *)",
+      "Bash(bun add *)",
+      "Bash(bun test *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\PC\\\\Desktop\\\\finbot\\\\trading-agents\" -Recurse)",
+      "Bash(Select-Object FullName)"
     ]
   }
 }
