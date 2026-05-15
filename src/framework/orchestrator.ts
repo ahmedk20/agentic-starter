@@ -8,10 +8,22 @@ export interface PlanStep {
   dependsOn?: string[]; // agent names that must complete before this step runs
 }
 
-interface AgentResult {
-  agentName: string;
-  output: AgentOutput;
+// Discriminated union — synthesize() branches on `ok`, never duck-types on shape.
+// Matches LLMResponse / Message / ContentBlock — same project-wide pattern.
+export type AgentResult =
+  | { agentName: string; ok: true; output: AgentOutput }
+  | { agentName: string; ok: false; error: string };
+
+export interface OrchestratorOptions {
+  // Hard upper bound on each agent's wall-clock time. A wedged tool or runaway
+  // tool-loop blows past 30s easily — without a cap, Promise.allSettled would still
+  // wait forever for the hung step.
+  agentTimeoutMs?: number;
 }
+
+// Default is intentionally generous — long enough for legitimate multi-tool agent runs,
+// short enough that an infinite loop won't burn through a token budget before tripping.
+const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
 
 // Generic planning prompt — no domain knowledge, no business logic.
 // The model learns what agents can do from the descriptions passed at runtime.
@@ -30,10 +42,15 @@ Rules:
 - Omit dependsOn for independent steps — they will run in parallel.`;
 
 export class Orchestrator {
+  private readonly agentTimeoutMs: number;
+
   constructor(
     private readonly registry: AgentRegistry,
     private readonly llm: LLMProvider,
-  ) {}
+    opts?: OrchestratorOptions,
+  ) {
+    this.agentTimeoutMs = opts?.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
+  }
 
   // Public entry point — the only method callers invoke directly.
   async run(task: string, signal?: AbortSignal): Promise<string> {
@@ -87,19 +104,20 @@ export class Orchestrator {
   }
 
   async dispatch(steps: PlanStep[], ctx: AgentContext): Promise<AgentResult[]> {
-    const completed = new Map<string, AgentOutput>();
-    const allResults: AgentResult[] = [];
+    const completed = new Map<string, AgentResult>();
     const remaining = [...steps];
 
     while (remaining.length > 0) {
-      // A step is ready when all its declared dependencies have finished.
+      // A step is ready when every declared dependency has *completed* — success or failure.
+      // We decide RUN vs SKIP per-step below, after the readiness gate.
       const ready = remaining.filter(
         (step) =>
           !step.dependsOn || step.dependsOn.every((dep) => completed.has(dep)),
       );
 
       if (ready.length === 0) {
-        // Nothing is ready but steps remain — dependency cycle or missing agent name.
+        // Nothing is ready but steps remain — dependency cycle or a depends-on referring
+        // to an agent that was never in the plan. Fail fast with the diagnostic info.
         throw new Error(
           `Unresolvable dependencies in plan. ` +
             `Remaining steps: [${remaining.map((s) => s.agentName).join(", ")}]. ` +
@@ -111,23 +129,26 @@ export class Orchestrator {
         remaining.splice(remaining.indexOf(step), 1);
       }
 
-      // Independent steps run in parallel — never serialize agents that don't need to wait.
-      const results = await Promise.all(
-        ready.map(async (step) => {
-          ctx.logger.info("dispatching agent", { agent: step.agentName });
-          const agent = this.registry.get(step.agentName);
-          const output = await agent.run({ task: step.task }, ctx);
-          return { agentName: step.agentName, output };
-        }),
+      // allSettled — independent steps share fate only if they were already linked
+      // via dependsOn. One step crashing must never abort a sibling.
+      const settled = await Promise.allSettled(
+        ready.map((step) => this.runStep(step, completed, ctx)),
       );
 
-      for (const result of results) {
-        completed.set(result.agentName, result.output);
-        allResults.push(result);
+      for (const s of settled) {
+        if (s.status === "fulfilled") {
+          completed.set(s.value.agentName, s.value);
+        } else {
+          // runStep catches everything — this branch is a framework bug, not a normal failure.
+          // Log loudly but don't crash; surface in synthesize() as a missing result.
+          ctx.logger.error("dispatch caught an unexpected rejection", {
+            error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+          });
+        }
       }
     }
 
-    return allResults;
+    return [...completed.values()];
   }
 
   async synthesize(
@@ -135,24 +156,117 @@ export class Orchestrator {
     results: AgentResult[],
     ctx: AgentContext,
   ): Promise<string> {
-    const agentOutputs = results
+    const successes = results.filter((r): r is Extract<AgentResult, { ok: true }> => r.ok);
+    const failures = results.filter((r): r is Extract<AgentResult, { ok: false }> => !r.ok);
+
+    if (successes.length === 0) {
+      // No survivors — synthesizing over nothing would produce hallucinated prose.
+      // Throw with the real failure list so the caller can act on the actual problem.
+      throw new Error(
+        `Run failed — every agent in the plan errored or was skipped:\n` +
+          failures.map((f) => `  - ${f.agentName}: ${f.error}`).join("\n"),
+      );
+    }
+
+    const agentOutputs = successes
       .map((r) => `[${r.agentName}]:\n${r.output.result}`)
       .join("\n\n");
+
+    // Tell the model what's missing — without this it may fabricate content to fill the gap.
+    const failureNote =
+      failures.length > 0
+        ? `\n\nNote: ${failures.length} agent(s) failed or were skipped — ` +
+          failures.map((f) => `${f.agentName} (${f.error})`).join(", ")
+        : "";
 
     const messages: Message[] = [
       {
         role: "system",
         content:
-          "You are a synthesis agent. Combine the outputs from multiple agents into one coherent, complete answer for the user.",
+          "You are a synthesis agent. Combine the outputs from multiple agents into one coherent, complete answer for the user. " +
+          "If some agents failed, work with what you have and briefly acknowledge the gap rather than inventing missing content.",
       },
       {
         role: "user",
-        content: `Original task: ${task}\n\nAgent outputs:\n${agentOutputs}\n\nProvide the final answer.`,
+        content: `Original task: ${task}\n\nAgent outputs:\n${agentOutputs}${failureNote}\n\nProvide the final answer.`,
       },
     ];
 
     const response = await this.llm.complete(messages, { signal: ctx.signal });
     return response.kind === "text" ? response.text : agentOutputs;
+  }
+
+  // ── private ────────────────────────────────────────────────────────────────
+
+  // Runs one step with cascade-skip + timeout + try/catch. Always resolves to an
+  // AgentResult — never throws — so Promise.allSettled's rejected branch only fires
+  // on a framework bug, not on normal agent failure.
+  private async runStep(
+    step: PlanStep,
+    completed: ReadonlyMap<string, AgentResult>,
+    ctx: AgentContext,
+  ): Promise<AgentResult> {
+    // Cascade: a step depending on a failed parent runs with corrupted upstream context.
+    // Better to mark it skipped than to let it produce garbage that synthesis combines.
+    const failedDeps = (step.dependsOn ?? []).filter((dep) => {
+      const r = completed.get(dep);
+      return r !== undefined && r.ok === false;
+    });
+    if (failedDeps.length > 0) {
+      const reason = `skipped — upstream agent(s) failed: [${failedDeps.join(", ")}]`;
+      ctx.logger.warn("agent skipped", { agent: step.agentName, reason });
+      return { agentName: step.agentName, ok: false, error: reason };
+    }
+
+    // Manual cancellation chain instead of AbortSignal.any([parent, AbortSignal.timeout(...)]).
+    // That composition has had reliability issues across runtimes — an explicit controller
+    // with a single timer + a parent-forward listener is deterministic and lets us record
+    // *which* source aborted (timeout vs parent) without inspecting other signals.
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.agentTimeoutMs);
+
+    const onParentAbort = (): void => controller.abort();
+    if (ctx.signal.aborted) {
+      controller.abort();
+    } else {
+      ctx.signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+
+    const childCtx: AgentContext = { ...ctx, signal: controller.signal };
+
+    ctx.logger.info("dispatching agent", {
+      agent: step.agentName,
+      timeoutMs: this.agentTimeoutMs,
+    });
+
+    try {
+      const agent = this.registry.get(step.agentName);
+      const output = await agent.run({ task: step.task }, childCtx);
+      return { agentName: step.agentName, ok: true, output };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.logger.warn("agent failed", {
+        agent: step.agentName,
+        error: message,
+        timedOut,
+      });
+      return {
+        agentName: step.agentName,
+        ok: false,
+        error: timedOut
+          ? `timed out after ${this.agentTimeoutMs}ms: ${message}`
+          : message,
+      };
+    } finally {
+      // Always release the timer and detach the parent listener — otherwise a long-running
+      // process accumulates millions of dead timers and ghost listeners over many runs.
+      clearTimeout(timer);
+      ctx.signal.removeEventListener("abort", onParentAbort);
+    }
   }
 
   // Fallback: run every registered agent in parallel with the original task.
