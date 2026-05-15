@@ -7,12 +7,15 @@ import { PRICES } from "@config/models";
 import { Orchestrator } from "@framework/orchestrator";
 import { AgentRegistry } from "@framework/registry";
 import { OpenAIProvider } from "@llm/openai-provider";
-import { ShortTermMemory } from "@memory/short-term";
+import { SqliteLongTermMemory } from "@memory/sqlite";
 
 // ── Build the dependency graph ───────────────────────────────────────────────
 
 const llm      = new OpenAIProvider(env.openaiKey, env.model);
-const memory   = new ShortTermMemory(); // available for agents that need cross-step state
+// Long-term memory persists across runs — a file-backed knowledge base shared by every
+// agent in this composition. Namespace "shared" because the current demo agents collaborate
+// on one task; per-agent namespaces would mean swapping this for a withNamespace() wrapper.
+const memory   = new SqliteLongTermMemory("shared", "./.agent-memory.db");
 const registry = new AgentRegistry();
 
 registry.register(new AnalystAgent(llm));
@@ -23,6 +26,7 @@ registry.register(new ResearcherAgent(llm));
 const orchestrator = new Orchestrator(registry, llm, {
   prices: PRICES,
   budgetUsd: 1.0,
+  memory,
 });
 
 // ── Run ──────────────────────────────────────────────────────────────────────
@@ -34,12 +38,17 @@ const task =
 
 console.log(`\nTask: ${task}\n`);
 
-const { answer, cost } = await orchestrator.run(task);
+try {
+  const { answer, cost } = await orchestrator.run(task);
 
-console.log("\n── Final Answer ──────────────────────────────────────────────────\n");
-console.log(answer);
-console.log("\n── Cost ──────────────────────────────────────────────────────────\n");
-console.log(`Total: $${cost.totalUsd.toFixed(4)}  (${cost.totalTokens} tokens)`);
-for (const [agent, { tokens, usd }] of Object.entries(cost.byAgent)) {
-  console.log(`  ${agent.padEnd(16)} $${usd.toFixed(4)}  (${tokens} tokens)`);
+  console.log("\n── Final Answer ──────────────────────────────────────────────────\n");
+  console.log(answer);
+  console.log("\n── Cost ──────────────────────────────────────────────────────────\n");
+  console.log(`Total: $${cost.totalUsd.toFixed(4)}  (${cost.totalTokens} tokens)`);
+  for (const [agent, { tokens, usd }] of Object.entries(cost.byAgent)) {
+    console.log(`  ${agent.padEnd(16)} $${usd.toFixed(4)}  (${tokens} tokens)`);
+  }
+} finally {
+  // SQLite holds an open file handle — release it so the process exits cleanly.
+  await memory.close();
 }

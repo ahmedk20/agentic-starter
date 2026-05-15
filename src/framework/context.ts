@@ -1,11 +1,13 @@
 import type {
   AgentContext,
   CostTracker,
+  MemoryStore,
   RunState,
   ScopedLogger,
   TraceCollector,
 } from "@core/types";
 import { NoOpCostTracker } from "@framework/cost-tracker";
+import { ShortTermMemory } from "@memory/short-term";
 import { ConsoleScopedLogger } from "@observability/logger";
 import { ConsoleTraceCollector } from "@observability/tracer";
 
@@ -18,6 +20,7 @@ export interface BuildContextOptions {
   logger?: ScopedLogger;
   tracer?: TraceCollector;
   costTracker?: CostTracker;
+  memory?: MemoryStore;
 }
 
 export function buildContext({
@@ -28,6 +31,7 @@ export function buildContext({
   logger,
   tracer,
   costTracker,
+  memory,
 }: BuildContextOptions): AgentContext {
   return {
     runId,
@@ -42,6 +46,9 @@ export function buildContext({
     // Default to NoOp so any context built without explicit cost tracking still satisfies
     // the type. Production callers (Orchestrator.run) always pass a real InMemoryCostTracker.
     costTracker: costTracker ?? new NoOpCostTracker(),
+    // Default to a per-run ShortTermMemory — every run gets its own scratchpad even when
+    // the application doesn't plug in a persistent backend. main.ts can swap in SQLite/Postgres.
+    memory: memory ?? new ShortTermMemory(),
   };
 }
 

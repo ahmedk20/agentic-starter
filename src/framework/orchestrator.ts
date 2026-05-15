@@ -1,4 +1,11 @@
-import type { AgentContext, AgentOutput, CostSummary, LLMProvider, Message } from "@core/types";
+import type {
+  AgentContext,
+  AgentOutput,
+  CostSummary,
+  LLMProvider,
+  MemoryStore,
+  Message,
+} from "@core/types";
 import { buildContext } from "@framework/context";
 import { InMemoryCostTracker, type ModelPrice } from "@framework/cost-tracker";
 import { AgentRegistry } from "@framework/registry";
@@ -25,6 +32,9 @@ export interface OrchestratorOptions {
   prices?: Record<string, ModelPrice>;
   // Hard ceiling in USD per run. Omit to track without enforcement.
   budgetUsd?: number;
+  // Memory backend exposed to agents via ctx.memory. Omit to give each run a fresh
+  // ShortTermMemory (no persistence). Plug in SqliteLongTermMemory or similar in main.ts.
+  memory?: MemoryStore;
 }
 
 // Default is intentionally generous — long enough for legitimate multi-tool agent runs,
@@ -59,6 +69,7 @@ export class Orchestrator {
   private readonly agentTimeoutMs: number;
   private readonly prices: Record<string, ModelPrice>;
   private readonly budgetUsd: number | undefined;
+  private readonly memory: MemoryStore | undefined;
 
   constructor(
     private readonly registry: AgentRegistry,
@@ -68,6 +79,7 @@ export class Orchestrator {
     this.agentTimeoutMs = opts?.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
     this.prices = opts?.prices ?? {};
     this.budgetUsd = opts?.budgetUsd;
+    this.memory = opts?.memory;
   }
 
   // Public entry point — the only method callers invoke directly.
@@ -85,6 +97,9 @@ export class Orchestrator {
       parentAgentName: "orchestrator",
       ...(signal !== undefined ? { signal } : {}),
       costTracker,
+      // If the application plugged in a long-term memory at construction time, share it
+      // across every run. Omit → buildContext defaults to a fresh ShortTermMemory per run.
+      ...(this.memory !== undefined ? { memory: this.memory } : {}),
     });
 
     ctx.logger.info("run started", { task, budgetUsd: this.budgetUsd });

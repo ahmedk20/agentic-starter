@@ -167,4 +167,5 @@ export interface AgentContext {
   readonly tracer: TraceCollector;
   readonly signal: AbortSignal;                      // cancelled by the orchestrator to stop a run cleanly
   readonly costTracker: CostTracker;                 // accumulates spend; providers record + check budget here
+  readonly memory: MemoryStore;                      // per-run scratch or persistent KB — wired in main.ts
 }

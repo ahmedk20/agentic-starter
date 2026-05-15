@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { AgentContext, Tool } from "@core/types";
 import { NoOpCostTracker } from "@framework/cost-tracker";
 import { FakeLLMProvider } from "@llm/fake";
+import { ShortTermMemory } from "@memory/short-term";
 import { runToolLoop } from "@framework/tool-loop";
 
 // Silent stub context — keeps test output clean, only care about return values here.
@@ -20,6 +21,7 @@ function makeCtx(): AgentContext {
     },
     signal: new AbortController().signal,
     costTracker: new NoOpCostTracker(),
+    memory: new ShortTermMemory(),
   };
 }
 

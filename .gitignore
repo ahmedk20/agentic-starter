@@ -3,3 +3,6 @@ dist/
 .env
 *.local
 bun.lockb
+
+# SQLite memory store + its WAL/SHM sidecars
+.agent-memory.db*

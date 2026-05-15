@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { z } from "zod";
 import type { AgentContext } from "@core/types";
 import { NoOpCostTracker } from "@framework/cost-tracker";
+import { ShortTermMemory } from "@memory/short-term";
 import { defineTool } from "@framework/tool";
 
 // Silent stub context — these tests care about validation, not observability.
@@ -20,6 +21,7 @@ function makeCtx(): AgentContext {
     },
     signal: new AbortController().signal,
     costTracker: new NoOpCostTracker(),
+    memory: new ShortTermMemory(),
   };
 }
 
