@@ -47,7 +47,7 @@ describe("Orchestrator.dispatch", () => {
     registry.register(makeAgent("analyst", { kind: "ok", result: "analyst result" }));
 
     const orch = new Orchestrator(registry, llm);
-    expect(await orch.run("t")).toBe("FINAL");
+    expect((await orch.run("t")).answer).toBe("FINAL");
   });
 
   it("synthesizes survivors when one of two independent agents fails", async () => {
@@ -68,7 +68,7 @@ describe("Orchestrator.dispatch", () => {
     registry.register(makeAgent("beta", { kind: "fail", error: "beta broken" }));
 
     const orch = new Orchestrator(registry, llm);
-    expect(await orch.run("t")).toBe("PARTIAL-FINAL");
+    expect((await orch.run("t")).answer).toBe("PARTIAL-FINAL");
 
     // Synthesis must have seen alpha's output AND been told about beta's failure.
     const synthCall = llm.calls[1]!;
@@ -124,7 +124,7 @@ describe("Orchestrator.dispatch", () => {
 
     // 50ms timeout — fast resolves immediately, slow is aborted by AbortSignal.timeout.
     const orch = new Orchestrator(registry, llm, { agentTimeoutMs: 50 });
-    expect(await orch.run("t")).toBe("FINAL");
+    expect((await orch.run("t")).answer).toBe("FINAL");
 
     // The synthesis prompt should mention the timeout failure for the slow agent.
     const synthCall = llm.calls[1]!;
@@ -133,6 +133,27 @@ describe("Orchestrator.dispatch", () => {
     expect(text).toContain("fast result");
     expect(text).toContain("slow");
     expect(text).toMatch(/timed out/);
+  });
+
+  it("returns a cost summary even on a happy-path run (NoOp-free path)", async () => {
+    // No price table → all costs are $0, but token counting + per-agent attribution must still
+    // populate the summary. This is the regression net for "did we forget to thread the tracker?"
+    const llm = new FakeLLMProvider([
+      { kind: "text", text: planText([{ agentName: "analyst", task: "..." }]) },
+      { kind: "text", text: "FINAL" },
+    ]);
+    const registry = new AgentRegistry();
+    registry.register(makeAgent("analyst", { kind: "ok", result: "ok" }));
+
+    const orch = new Orchestrator(registry, llm);
+    const { cost } = await orch.run("t");
+    // FakeLLMProvider returns no usage data, so totals stay at 0 — but the summary shape must exist.
+    expect(cost).toMatchObject({
+      totalUsd: 0,
+      totalTokens: 0,
+      byAgent: expect.any(Object),
+      byModel: expect.any(Object),
+    });
   });
 
   it("throws cleanly when every step fails (no survivors to synthesize)", async () => {

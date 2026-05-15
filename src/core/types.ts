@@ -52,6 +52,36 @@ export interface LLMCompleteOptions {
   tools?: readonly Tool[];
   signal?: AbortSignal;   // honors ctx.signal — lets the orchestrator cancel mid-call
   maxTokens?: number;
+  // Optional context handle so the provider can (a) check the budget before calling,
+  // (b) record usage afterwards, attributed to ctx.parentAgentName. Optional because
+  // FakeLLMProvider in tests doesn't need it; in production, callers always pass it.
+  ctx?: AgentContext;
+}
+
+// Raw counts returned by every provider's response.
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
+// Aggregated view of one run's spend — returned from Orchestrator.run().
+export interface CostSummary {
+  totalUsd: number;
+  totalTokens: number;
+  byAgent: Record<string, { tokens: number; usd: number }>;
+  byModel: Record<string, { tokens: number; usd: number }>;
+}
+
+// Tracks token + dollar spend across one run. Implementations live in src/framework/.
+// Lives in core/ because both providers (which call record) and orchestrator (which reads
+// summary) depend on the shape — putting it elsewhere creates a backwards dependency.
+export interface CostTracker {
+  record(agentName: string, model: string, usage: TokenUsage): void;
+  totalUsd(): number;
+  summary(): CostSummary;
+  // Throws BudgetExceededError if spend has already reached the cap. Called by providers
+  // BEFORE the request, so the next call cannot push the run past budget.
+  assertWithinBudget(): void;
 }
 
 // Discriminated union: the tool loop branches on `kind`, never on duck-typing.
@@ -136,4 +166,5 @@ export interface AgentContext {
   readonly logger: ScopedLogger;
   readonly tracer: TraceCollector;
   readonly signal: AbortSignal;                      // cancelled by the orchestrator to stop a run cleanly
+  readonly costTracker: CostTracker;                 // accumulates spend; providers record + check budget here
 }

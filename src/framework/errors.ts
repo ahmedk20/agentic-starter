@@ -16,3 +16,19 @@ export class AgentCancelledError extends AgentError {
     this.name = "AgentCancelledError";
   }
 }
+
+// Thrown by an LLMProvider when the run's accumulated cost has reached the budget.
+// Does NOT extend AgentError — it can fire on the orchestrator's own plan/synthesize calls
+// where there is no agent. BaseAgent.run() re-throws this unchanged (same pattern as
+// AgentError) so the typed information survives the agent boundary.
+export class BudgetExceededError extends Error {
+  constructor(
+    readonly currentUsd: number,
+    readonly budgetUsd: number,
+  ) {
+    super(
+      `Budget exceeded — accumulated $${currentUsd.toFixed(4)} reached cap $${budgetUsd.toFixed(4)}`,
+    );
+    this.name = "BudgetExceededError";
+  }
+}

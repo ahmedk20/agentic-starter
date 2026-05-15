@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentContext, Tool } from "@core/types";
+import { NoOpCostTracker } from "@framework/cost-tracker";
 import { FakeLLMProvider } from "@llm/fake";
 import { runToolLoop } from "@framework/tool-loop";
 
@@ -18,6 +19,7 @@ function makeCtx(): AgentContext {
       getEvents: () => [],
     },
     signal: new AbortController().signal,
+    costTracker: new NoOpCostTracker(),
   };
 }
 

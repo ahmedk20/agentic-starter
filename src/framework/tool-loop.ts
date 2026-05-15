@@ -21,7 +21,9 @@ export async function runToolLoop({
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // LLM errors are intentionally NOT caught here — they bubble up to BaseAgent.run()
     // which wraps them as AgentError. Swallowing them here would hide real failures.
-    const response = await llm.complete(history, { tools, signal: ctx.signal });
+    // Passing ctx (not just signal) lets the provider record token usage to ctx.costTracker
+    // and check the budget cap before firing the request.
+    const response = await llm.complete(history, { tools, signal: ctx.signal, ctx });
 
     if (response.kind === "text") {
       return response.text;

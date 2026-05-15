@@ -3,7 +3,7 @@
 import { AnalystAgent } from "@agents/analyst";
 import { ResearcherAgent } from "@agents/researcher";
 import { env } from "@config/env";
-import { buildContext } from "@framework/context";
+import { PRICES } from "@config/models";
 import { Orchestrator } from "@framework/orchestrator";
 import { AgentRegistry } from "@framework/registry";
 import { OpenAIProvider } from "@llm/openai-provider";
@@ -18,7 +18,12 @@ const registry = new AgentRegistry();
 registry.register(new AnalystAgent(llm));
 registry.register(new ResearcherAgent(llm));
 
-const orchestrator = new Orchestrator(registry, llm);
+// Budget cap is intentionally conservative for a demo. Raise via env var when running
+// production workloads. budgetUsd: undefined would disable the ceiling entirely.
+const orchestrator = new Orchestrator(registry, llm, {
+  prices: PRICES,
+  budgetUsd: 1.0,
+});
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 
@@ -29,7 +34,12 @@ const task =
 
 console.log(`\nTask: ${task}\n`);
 
-const answer = await orchestrator.run(task);
+const { answer, cost } = await orchestrator.run(task);
 
 console.log("\n── Final Answer ──────────────────────────────────────────────────\n");
 console.log(answer);
+console.log("\n── Cost ──────────────────────────────────────────────────────────\n");
+console.log(`Total: $${cost.totalUsd.toFixed(4)}  (${cost.totalTokens} tokens)`);
+for (const [agent, { tokens, usd }] of Object.entries(cost.byAgent)) {
+  console.log(`  ${agent.padEnd(16)} $${usd.toFixed(4)}  (${tokens} tokens)`);
+}

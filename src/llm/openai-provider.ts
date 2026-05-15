@@ -22,6 +22,10 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async complete(messages: Message[], opts?: LLMCompleteOptions): Promise<LLMResponse> {
+    // Budget check fires BEFORE the request — once we've sent the request the dollars are
+    // already spent. Throws BudgetExceededError, which BaseAgent.run() re-throws unchanged.
+    opts?.ctx?.costTracker.assertWithinBudget();
+
     const response = await this.client.chat.completions.create(
       {
         model: this.model,
@@ -33,6 +37,16 @@ export class OpenAIProvider implements LLMProvider {
       // signal lives in the request options, not the body — this is how the SDK wires AbortSignal.
       { signal: opts?.signal },
     );
+
+    // Record usage post-flight. parentAgentName is the *calling* agent's name — set by
+    // BaseAgent.run() when it built the child ctx — so attribution lands on the real owner,
+    // not on "orchestrator" which is only the root context's name.
+    if (opts?.ctx && response.usage) {
+      opts.ctx.costTracker.record(opts.ctx.parentAgentName, this.model, {
+        promptTokens: response.usage.prompt_tokens,
+        completionTokens: response.usage.completion_tokens,
+      });
+    }
 
     const message = response.choices[0]?.message;
     if (!message) throw new Error("OpenAI returned no choices");

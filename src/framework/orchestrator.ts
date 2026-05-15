@@ -1,5 +1,6 @@
-import type { AgentContext, AgentOutput, LLMProvider, Message } from "@core/types";
+import type { AgentContext, AgentOutput, CostSummary, LLMProvider, Message } from "@core/types";
 import { buildContext } from "@framework/context";
+import { InMemoryCostTracker, type ModelPrice } from "@framework/cost-tracker";
 import { AgentRegistry } from "@framework/registry";
 
 export interface PlanStep {
@@ -19,11 +20,24 @@ export interface OrchestratorOptions {
   // tool-loop blows past 30s easily — without a cap, Promise.allSettled would still
   // wait forever for the hung step.
   agentTimeoutMs?: number;
+  // Price table for cost tracking — keyed by model name. Per-deployment config; the
+  // framework reads it but never imports it. Pass {} to count tokens with zero cost.
+  prices?: Record<string, ModelPrice>;
+  // Hard ceiling in USD per run. Omit to track without enforcement.
+  budgetUsd?: number;
 }
 
 // Default is intentionally generous — long enough for legitimate multi-tool agent runs,
 // short enough that an infinite loop won't burn through a token budget before tripping.
 const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
+
+// What every Orchestrator.run() resolves to — answer is the synthesized prose, cost is
+// the per-run ledger broken down by agent and model. Returning both forces callers to
+// see what their run cost rather than burying it in a side-channel log.
+export interface OrchestratorResult {
+  answer: string;
+  cost: CostSummary;
+}
 
 // Generic planning prompt — no domain knowledge, no business logic.
 // The model learns what agents can do from the descriptions passed at runtime.
@@ -43,6 +57,8 @@ Rules:
 
 export class Orchestrator {
   private readonly agentTimeoutMs: number;
+  private readonly prices: Record<string, ModelPrice>;
+  private readonly budgetUsd: number | undefined;
 
   constructor(
     private readonly registry: AgentRegistry,
@@ -50,27 +66,38 @@ export class Orchestrator {
     opts?: OrchestratorOptions,
   ) {
     this.agentTimeoutMs = opts?.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
+    this.prices = opts?.prices ?? {};
+    this.budgetUsd = opts?.budgetUsd;
   }
 
   // Public entry point — the only method callers invoke directly.
-  async run(task: string, signal?: AbortSignal): Promise<string> {
+  async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
     const runId = crypto.randomUUID();
+    // Tracker is per-run: budgets are enforced per task, and a long-running process
+    // must not silently accumulate spend across unrelated calls. The same instance is
+    // threaded into ctx so every provider call records and budget-checks against it.
+    const costTracker = new InMemoryCostTracker({
+      prices: this.prices,
+      ...(this.budgetUsd !== undefined ? { budgetUsd: this.budgetUsd } : {}),
+    });
     const ctx = buildContext({
       runId,
       parentAgentName: "orchestrator",
       ...(signal !== undefined ? { signal } : {}),
+      costTracker,
     });
 
-    ctx.logger.info("run started", { task });
+    ctx.logger.info("run started", { task, budgetUsd: this.budgetUsd });
 
     const steps = await this.plan(task, ctx);
     ctx.logger.info("plan ready", { stepCount: steps.length });
 
     const results = await this.dispatch(steps, ctx);
     const answer = await this.synthesize(task, results, ctx);
+    const cost = costTracker.summary();
 
-    ctx.logger.info("run complete");
-    return answer;
+    ctx.logger.info("run complete", { totalUsd: cost.totalUsd, totalTokens: cost.totalTokens });
+    return { answer, cost };
   }
 
   async plan(task: string, ctx: AgentContext): Promise<PlanStep[]> {
@@ -84,7 +111,7 @@ export class Orchestrator {
       { role: "user", content: `Agents:\n${agentList}\n\nTask: ${task}` },
     ];
 
-    const response = await this.llm.complete(messages, { signal: ctx.signal });
+    const response = await this.llm.complete(messages, { signal: ctx.signal, ctx });
 
     if (response.kind !== "text") {
       ctx.logger.warn("planner returned tool_use unexpectedly — using fallback plan");
@@ -192,7 +219,7 @@ export class Orchestrator {
       },
     ];
 
-    const response = await this.llm.complete(messages, { signal: ctx.signal });
+    const response = await this.llm.complete(messages, { signal: ctx.signal, ctx });
     return response.kind === "text" ? response.text : agentOutputs;
   }
 

@@ -1,4 +1,11 @@
-import type { AgentContext, RunState, ScopedLogger, TraceCollector } from "@core/types";
+import type {
+  AgentContext,
+  CostTracker,
+  RunState,
+  ScopedLogger,
+  TraceCollector,
+} from "@core/types";
+import { NoOpCostTracker } from "@framework/cost-tracker";
 import { ConsoleScopedLogger } from "@observability/logger";
 import { ConsoleTraceCollector } from "@observability/tracer";
 
@@ -10,6 +17,7 @@ export interface BuildContextOptions {
   // Optional overrides — pass silent stubs in tests to suppress console output.
   logger?: ScopedLogger;
   tracer?: TraceCollector;
+  costTracker?: CostTracker;
 }
 
 export function buildContext({
@@ -19,6 +27,7 @@ export function buildContext({
   signal,
   logger,
   tracer,
+  costTracker,
 }: BuildContextOptions): AgentContext {
   return {
     runId,
@@ -30,6 +39,9 @@ export function buildContext({
     tracer: tracer ?? new ConsoleTraceCollector(),
     // Default signal is never aborted — safe for runs that don't need cancellation.
     signal: signal ?? new AbortController().signal,
+    // Default to NoOp so any context built without explicit cost tracking still satisfies
+    // the type. Production callers (Orchestrator.run) always pass a real InMemoryCostTracker.
+    costTracker: costTracker ?? new NoOpCostTracker(),
   };
 }
 

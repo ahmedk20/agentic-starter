@@ -6,7 +6,7 @@ import type {
   LLMProvider,
   Tool,
 } from "@core/types";
-import { AgentCancelledError, AgentError } from "@framework/errors";
+import { AgentCancelledError, AgentError, BudgetExceededError } from "@framework/errors";
 
 export abstract class BaseAgent implements Agent {
   // Subclasses declare these as readonly class fields — no constructor argument needed.
@@ -27,13 +27,23 @@ export abstract class BaseAgent implements Agent {
       throw new AgentCancelledError(this.name);
     }
 
+    // Child context: this is where attribution becomes correct. The parent ctx was built
+    // with parentAgentName = "orchestrator"; downstream tools and LLM calls should now see
+    // *this agent's* name so cost tracking, logging, and traces attribute to the real owner.
+    // depth increments here so future recursion-depth guards have a real counter to read.
+    const childCtx: AgentContext = {
+      ...ctx,
+      parentAgentName: this.name,
+      depth: ctx.depth + 1,
+    };
+
     const spanId = ctx.tracer.startSpan(this.name, ctx.runId, input);
     const startedAt = Date.now();
 
     ctx.logger.info("agent started", { agent: this.name, task: input.task });
 
     try {
-      const output = await this.execute(input, ctx);
+      const output = await this.execute(input, childCtx);
       const durationMs = Date.now() - startedAt;
 
       ctx.tracer.endSpan(spanId, output, durationMs);
@@ -43,9 +53,10 @@ export abstract class BaseAgent implements Agent {
     } catch (err) {
       const durationMs = Date.now() - startedAt;
 
-      // Re-throw typed errors unchanged — AgentCancelledError is already an AgentError,
-      // wrapping it again would lose the original type and confuse the orchestrator.
-      if (err instanceof AgentError) {
+      // Re-throw typed errors unchanged — AgentError carries agentName, BudgetExceededError
+      // carries cost info. Wrapping either would erase the type info the orchestrator needs
+      // to decide how to respond (retry vs abort vs surface to user).
+      if (err instanceof AgentError || err instanceof BudgetExceededError) {
         ctx.logger.error("agent failed", { agent: this.name, error: err.message, durationMs });
         ctx.tracer.endSpan(spanId, { result: err.message, confidence: 0 }, durationMs);
         throw err;
