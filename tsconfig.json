@@ -18,7 +18,8 @@
       "@observability/*": ["./src/observability/*"],
       "@agents/*":        ["./src/agents/*"],
       "@tools/*":         ["./src/tools/*"],
-      "@config/*":        ["./src/config/*"]
+      "@config/*":        ["./src/config/*"],
+      "@evals/*":         ["./src/evals/*"]
     }
   },
   "include": ["src/**/*"],

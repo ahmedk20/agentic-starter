@@ -42,11 +42,13 @@ export interface OrchestratorOptions {
 const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
 
 // What every Orchestrator.run() resolves to — answer is the synthesized prose, cost is
-// the per-run ledger broken down by agent and model. Returning both forces callers to
-// see what their run cost rather than burying it in a side-channel log.
+// the per-run ledger broken down by agent and model, steps is the per-agent outcome list.
+// Returning all three forces callers to see exactly what happened rather than burying
+// the receipts in a side-channel log.
 export interface OrchestratorResult {
   answer: string;
   cost: CostSummary;
+  steps: AgentResult[];
 }
 
 // Generic planning prompt — no domain knowledge, no business logic.
@@ -112,7 +114,7 @@ export class Orchestrator {
     const cost = costTracker.summary();
 
     ctx.logger.info("run complete", { totalUsd: cost.totalUsd, totalTokens: cost.totalTokens });
-    return { answer, cost };
+    return { answer, cost, steps: results };
   }
 
   async plan(task: string, ctx: AgentContext): Promise<PlanStep[]> {
